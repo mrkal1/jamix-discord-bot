@@ -25,12 +25,15 @@ FOOD_API_KEY = os.getenv('FOOD_API_KEY')  # Add your API key to .env file
 class MenuView(discord.ui.View):
     """Interactive view for switching between menu days"""
     
-    def __init__(self, menu_data, current_day=0, guild_id=None):
-        super().__init__(timeout=300)  # 5 minute timeout
+    def __init__(self, menu_data, current_day=0, guild_id=None, persistent=True):
+        # Use no timeout for daily messages, 15 minutes for user commands
+        timeout = None if persistent else 900  # 15 minutes for user interactions
+        super().__init__(timeout=timeout)
         self.menu_data = menu_data
         self.current_day = current_day
         self.days = list(menu_data.keys())
         self.guild_id = guild_id
+        self.persistent = persistent
         
     @discord.ui.button(label='◀️ Edellinen Päivä', style=discord.ButtonStyle.secondary)
     async def previous_day(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -88,7 +91,7 @@ class MenuView(discord.ui.View):
             new_menu_data = await fetch_menu_data(guild_id)
             if new_menu_data:
                 # Create a new view with fresh data for this user
-                user_view = MenuView(new_menu_data, 0, guild_id)
+                user_view = MenuView(new_menu_data, 0, guild_id, persistent=False)  # User interaction, not persistent
                 embed = user_view.create_menu_embed()
                 await interaction.followup.send(embed=embed, view=user_view, ephemeral=True)
             else:
@@ -114,9 +117,19 @@ class MenuView(discord.ui.View):
                 items_text = "\n".join([f"• {item}" for item in items])
                 embed.add_field(name=f"**{category}**", value=items_text, inline=False)
         
-        embed.set_footer(text=f"Day {self.current_day + 1} of {len(self.days)} | Click buttons to navigate (personal view)")
+        footer_text = f"Day {self.current_day + 1} of {len(self.days)} | Click buttons to navigate"
+        if not self.persistent:
+            footer_text += " (personal view)"
+        embed.set_footer(text=footer_text)
         
         return embed
+    
+    async def on_timeout(self):
+        """Called when the view times out"""
+        # Disable all buttons when timeout occurs
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
 
 def parse_jamix_data(jamix_data):
     """Parse Jamix API data into a format suitable for the Discord bot"""
@@ -264,7 +277,7 @@ async def show_menu(interaction: discord.Interaction):
         await interaction.followup.send("❌ Ei voitu noutaa ruokalistaa tällä hetkellä. Yritä myöhemmin uudelleen.")
         return
     
-    view = MenuView(menu_data, guild_id=guild_id)
+    view = MenuView(menu_data, guild_id=guild_id, persistent=False)  # Non-persistent for user commands
     embed = view.create_menu_embed()
     
     await interaction.followup.send(embed=embed, view=view)
@@ -414,7 +427,8 @@ async def daily_menu_post():
                 except ValueError:
                     current_day_index = 0
                 
-                view = MenuView(menu_data, current_day=current_day_index, guild_id=guild_id)
+                # Use persistent=True for daily messages so buttons don't expire
+                view = MenuView(menu_data, current_day=current_day_index, guild_id=guild_id, persistent=True)
                 embed = view.create_menu_embed()
                 
                 message = f"**Ruokalista {found_day_name}:**"
