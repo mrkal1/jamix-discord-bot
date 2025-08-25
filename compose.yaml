@@ -1,0 +1,10 @@
+services:
+  jamixdiscordbot:
+    image: jamixdiscordbot
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./server_config.json:/app/server_config.json
