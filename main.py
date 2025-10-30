@@ -7,12 +7,16 @@ import zoneinfo
 import os
 from dotenv import load_dotenv
 from config import ServerConfig
+from database import ButtonDatabase
 
 # Load environment variables
 load_dotenv()
 
 # Initialize server configuration
 server_config = ServerConfig()
+
+# Initialize database for persistent buttons
+button_db = ButtonDatabase()
 
 # Bot configuration
 intents = discord.Intents.default()
@@ -25,8 +29,8 @@ FOOD_API_KEY = os.getenv('FOOD_API_KEY')  # Add your API key to .env file
 class MenuView(discord.ui.View):
     """Interactive view for switching between menu days"""
     
-    def __init__(self, menu_data, current_day=0, guild_id=None, persistent=True):
-        # Use no timeout for daily messages, 15 minutes for user commands
+    def __init__(self, menu_data, current_day=0, guild_id=None, persistent=True, message_id=None):
+        # Use no timeout for daily messages (persistent), 15 minutes for user commands
         timeout = None if persistent else 900  # 15 minutes for user interactions
         super().__init__(timeout=timeout)
         self.menu_data = menu_data
@@ -34,11 +38,22 @@ class MenuView(discord.ui.View):
         self.days = list(menu_data.keys())
         self.guild_id = guild_id
         self.persistent = persistent
+        self.message_id = message_id  # Store message_id for database updates
         
-    @discord.ui.button(label='◀️ Edellinen Päivä', style=discord.ButtonStyle.secondary)
-    async def previous_day(self, interaction: discord.Interaction, button: discord.ui.Button, custom_id="previous_day"):
+    @discord.ui.button(label='◀️ Edellinen Päivä', style=discord.ButtonStyle.secondary, custom_id="menu:previous_day")
+    async def previous_day(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_day = (self.current_day - 1) % len(self.days)
         embed = self.create_menu_embed()
+        
+        # Update database if this is a persistent view
+        if self.persistent and self.message_id and interaction.guild and interaction.channel_id:
+            button_db.save_menu_view(
+                self.message_id,
+                self.guild_id or interaction.guild.id,
+                interaction.channel_id,
+                self.menu_data,
+                self.current_day
+            )
         
         # Check if this is an ephemeral message by looking at message flags
         is_ephemeral = interaction.message and interaction.message.flags.ephemeral
@@ -50,10 +65,20 @@ class MenuView(discord.ui.View):
             # This is the original shared message - create ephemeral response
             await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
     
-    @discord.ui.button(label='▶️ Seuraava Päivä', style=discord.ButtonStyle.secondary, custom_id="next_day")
+    @discord.ui.button(label='▶️ Seuraava Päivä', style=discord.ButtonStyle.secondary, custom_id="menu:next_day")
     async def next_day(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_day = (self.current_day + 1) % len(self.days)
         embed = self.create_menu_embed()
+        
+        # Update database if this is a persistent view
+        if self.persistent and self.message_id and interaction.guild and interaction.channel_id:
+            button_db.save_menu_view(
+                self.message_id,
+                self.guild_id or interaction.guild.id,
+                interaction.channel_id,
+                self.menu_data,
+                self.current_day
+            )
         
         # Check if this is an ephemeral message by looking at message flags
         is_ephemeral = interaction.message and interaction.message.flags.ephemeral
@@ -65,7 +90,7 @@ class MenuView(discord.ui.View):
             # This is the original shared message - create ephemeral response
             await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
 
-    @discord.ui.button(label='🔄 Päivitä', style=discord.ButtonStyle.primary, custom_id="refresh_menu")
+    @discord.ui.button(label='🔄 Päivitä', style=discord.ButtonStyle.primary, custom_id="menu:refresh_menu")
     async def refresh_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Fetch fresh menu data using the guild_id
         guild_id = self.guild_id or (interaction.guild.id if interaction.guild else None)
@@ -256,6 +281,31 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to sync commands: {e}")
     
+    # Register persistent views from database
+    print("Registering persistent views from database...")
+    try:
+        persistent_menus = button_db.get_all_persistent_menus()
+        for message_id, menu_info in persistent_menus:
+            view = MenuView(
+                menu_info['menu_data'],
+                current_day=menu_info['current_day'],
+                guild_id=menu_info['guild_id'],
+                persistent=True,
+                message_id=message_id
+            )
+            bot.add_view(view, message_id=message_id)
+        print(f"Registered {len(persistent_menus)} persistent menu view(s)")
+    except Exception as e:
+        print(f"Error registering persistent views: {e}")
+    
+    # Cleanup old menus (older than 7 days)
+    try:
+        deleted_count = button_db.cleanup_old_menus(days=7)
+        if deleted_count > 0:
+            print(f"Cleaned up {deleted_count} old menu view(s)")
+    except Exception as e:
+        print(f"Error cleaning up old menus: {e}")
+    
     # Start the daily menu posting task
     daily_menu_post.start()
 
@@ -435,7 +485,18 @@ async def daily_menu_post():
                 if found_day_name != today_str:
                     message = f"**Tämän päivän ruokalista ei saatavilla, näytetään {found_day_name}:**"
 
-                await channel.send(message, embed=embed, view=view)
+                sent_message = await channel.send(message, embed=embed, view=view)
+                
+                # Save to database for persistence across restarts
+                view.message_id = sent_message.id
+                button_db.save_menu_view(
+                    sent_message.id,
+                    guild_id,
+                    channel.id,
+                    menu_data,
+                    current_day_index
+                )
+                
                 print(f"Posted daily menu for guild {guild_id} ({guild.name})")
             else:
                 await channel.send(f"❌ Ruokalistaa ei ole saatavilla.")
@@ -601,6 +662,32 @@ async def test_api(interaction: discord.Interaction):
         await interaction.edit_original_response(content=None, embed=embed)
     else:
         await interaction.edit_original_response(content="❌ API test failed. Check console for error details or verify your menu IDs with `/show_config`")
+
+@bot.tree.command(name='cleanup_old_menus', description='Remove old persistent menu views from the database')
+@app_commands.describe(days="Number of days (default: 7) - menus older than this will be removed")
+async def cleanup_old_menus(interaction: discord.Interaction, days: int = 7):
+    """Cleanup old persistent menus from the database (Admin only)"""
+    # Check if user has administrator permissions
+    if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Sinä tarvitset ylläpitäjäoikeudet käyttääksesi tätä komentoa.", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        deleted_count = button_db.cleanup_old_menus(days)
+        
+        embed = discord.Embed(
+            title="✅ Cleanup Complete",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="Removed Views", value=str(deleted_count), inline=True)
+        embed.add_field(name="Older Than", value=f"{days} days", inline=True)
+        
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error during cleanup: {e}")
 
 if __name__ == "__main__":
     # Get bot token from environment variable

@@ -1,14 +1,16 @@
 # Discord Food Menu Bot
 
-A Discord bot that posts daily food menus from an API with interactive day navigation features.
+A Discord bot that posts daily food menus from an API with interactive day navigation features and **persistent buttons** that survive bot restarts.
 
 ## Features
 
 - 🍽️ **Daily Menu Display**: Automatically posts daily food menus
 - 🔄 **Interactive Navigation**: Switch between different days using buttons
+- 🔁 **Persistent Buttons**: Buttons continue working even after bot restarts
 - ⏰ **Scheduled Posts**: Automatic daily menu posting at 7:00 AM (weekdays only)
 - 🎯 **Multiple Commands**: Various commands for different menu views
 - 🛡️ **Admin Controls**: Administrator-only commands for bot configuration
+- 💾 **Database Storage**: SQLite database for persistent button state
 
 ## Commands
 
@@ -18,6 +20,8 @@ A Discord bot that posts daily food menus from an API with interactive day navig
 - `/set_menu_id customer_id kitchen_id` - Set the Jamix customer and kitchen IDs (Admin only)
 - `/show_config` - Show current server configuration (Admin only)
 - `/test_api` - Test the Jamix API connection (Admin only)
+- `/cleanup_old_menus [days]` - Remove old persistent menu views from database (Admin only)
+- `/test_daily_posting` - Test the daily menu posting (Admin only)
 
 ## Setup Instructions
 
@@ -101,13 +105,26 @@ The bot automatically posts the daily menu at midnight (configurable). Make sure
 1. Set the `DAILY_MENU_CHANNEL_ID` in your `.env` file
 2. Ensure the bot has permissions to post in that channel
 
+### Persistent Buttons
+
+The bot implements **dynamically persistent buttons** that survive bot restarts:
+- Daily menu posts maintain interactive buttons even after bot restarts
+- Button states are stored in SQLite database (`bot_data.db`)
+- Automatic cleanup of old menu views (7+ days)
+- Manual cleanup available via `/cleanup_old_menus` command
+
+For detailed implementation information, see [PERSISTENT_BUTTONS.md](PERSISTENT_BUTTONS.md)
+
 ## Development
 
 ### Project Structure
 
 - `main.py` - Main bot file with all commands and functionality
+- `database.py` - Database handler for persistent button storage
+- `config.py` - Server configuration management
 - `.env` - Environment variables (create from `.env.example`)
 - `requirements.txt` - Python dependencies
+- `bot_data.db` - SQLite database (auto-created)
 - `.gitignore` - Git ignore rules for Python projects
 
 ### Customization
@@ -116,6 +133,7 @@ The bot automatically posts the daily menu at midnight (configurable). Make sure
 - **Embed Styling**: Customize colors and formatting in `create_menu_embed()`
 - **Posting Schedule**: Adjust the `@tasks.loop()` decorator for different intervals
 - **Button Labels**: Change button text and emojis in the `MenuView` class
+- **Database Retention**: Modify cleanup period in `on_ready` or `/cleanup_old_menus`
 
 ## Troubleshooting
 
@@ -125,6 +143,7 @@ The bot automatically posts the daily menu at midnight (configurable). Make sure
 2. **Permission errors**: Ensure the bot has necessary permissions in the server
 3. **Daily posts not working**: Verify `DAILY_MENU_CHANNEL_ID` is set correctly
 4. **API errors**: Check your API endpoint and authentication
+5. **Buttons not working after restart**: Check database logs and ensure `bot_data.db` exists
 
 ### Logs
 
@@ -132,6 +151,7 @@ The bot logs important events to the console. Check for:
 - Connection status
 - API request failures
 - Channel configuration issues
+- Database operations (save/load persistent views)
 
 ## License
 
