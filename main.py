@@ -286,19 +286,13 @@ async def handle_menu_navigation(interaction: discord.Interaction, direction: in
         await interaction.response.send_message("❌ Menu data not found. This might be an expired view.", ephemeral=True)
         return
     
+    # Check if this is an ephemeral message (user's personal view)
+    is_ephemeral = interaction.message and interaction.message.flags.ephemeral
+    
     # Update current day
     days = list(menu_info['menu_data'].keys())
     current_day = menu_info['current_day']
     new_day = (current_day + direction) % len(days)
-    
-    # Save updated state
-    button_db.save_menu_view(
-        message_id,
-        menu_info['guild_id'],
-        menu_info['channel_id'],
-        menu_info['menu_data'],
-        new_day
-    )
     
     # Create embed for new day
     current_day_name = days[new_day]
@@ -316,10 +310,27 @@ async def handle_menu_navigation(interaction: discord.Interaction, direction: in
             items_text = "\n".join([f"• {item}" for item in items])
             embed.add_field(name=f"**{category}**", value=items_text, inline=False)
     
-    embed.set_footer(text=f"Day {new_day + 1} of {len(days)} | Click buttons to navigate")
-    
-    # Update the message
-    await interaction.response.edit_message(embed=embed)
+    if is_ephemeral:
+        # This is a user's personal ephemeral message - edit it directly
+        embed.set_footer(text=f"Day {new_day + 1} of {len(days)} | Click buttons to navigate (personal view)")
+        
+        # Save updated state for this ephemeral view
+        button_db.save_menu_view(
+            message_id,
+            menu_info['guild_id'],
+            menu_info['channel_id'],
+            menu_info['menu_data'],
+            new_day
+        )
+        
+        await interaction.response.edit_message(embed=embed)
+    else:
+        # This is the original daily message - send ephemeral response
+        embed.set_footer(text=f"Day {new_day + 1} of {len(days)} | Click buttons to navigate (personal view)")
+        
+        # Create a new ephemeral MenuView for the user
+        user_view = MenuView(menu_info['menu_data'], new_day, menu_info['guild_id'], persistent=False)
+        await interaction.response.send_message(embed=embed, view=user_view, ephemeral=True)
 
 async def handle_menu_refresh(interaction: discord.Interaction):
     """Handle refresh button by fetching fresh menu data"""
@@ -336,22 +347,16 @@ async def handle_menu_refresh(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Menu data not found", ephemeral=True)
         return
     
-    await interaction.response.defer()
+    # Check if this is an ephemeral message (user's personal view)
+    is_ephemeral = interaction.message and interaction.message.flags.ephemeral
+    
+    await interaction.response.defer(ephemeral=True)
     
     # Fetch fresh menu data
     guild_id = menu_info['guild_id']
     new_menu_data = await fetch_menu_data(guild_id)
     
     if new_menu_data:
-        # Update database with fresh data
-        button_db.save_menu_view(
-            message_id,
-            guild_id,
-            menu_info['channel_id'],
-            new_menu_data,
-            0  # Reset to first day
-        )
-        
         # Create embed for first day
         days = list(new_menu_data.keys())
         current_day_name = days[0]
@@ -369,11 +374,29 @@ async def handle_menu_refresh(interaction: discord.Interaction):
                 items_text = "\n".join([f"• {item}" for item in items])
                 embed.add_field(name=f"**{category}**", value=items_text, inline=False)
         
-        embed.set_footer(text=f"Day 1 of {len(days)} | Click buttons to navigate | Refreshed")
-        
-        await interaction.edit_original_response(embed=embed)
+        if is_ephemeral:
+            # This is a user's ephemeral message - update it
+            embed.set_footer(text=f"Day 1 of {len(days)} | Click buttons to navigate | Refreshed (personal view)")
+            
+            # Update database with fresh data for this ephemeral view
+            button_db.save_menu_view(
+                message_id,
+                guild_id,
+                menu_info['channel_id'],
+                new_menu_data,
+                0  # Reset to first day
+            )
+            
+            await interaction.edit_original_response(embed=embed)
+        else:
+            # This is the original daily message - send ephemeral response with fresh data
+            embed.set_footer(text=f"Day 1 of {len(days)} | Click buttons to navigate | Refreshed (personal view)")
+            
+            # Create a new ephemeral MenuView for the user with fresh data
+            user_view = MenuView(new_menu_data, 0, guild_id, persistent=False)
+            await interaction.followup.send(embed=embed, view=user_view, ephemeral=True)
     else:
-        await interaction.edit_original_response(content="❌ Failed to refresh menu data.")
+        await interaction.followup.send("❌ Failed to refresh menu data.", ephemeral=True)
 
 @bot.event
 async def on_ready():
