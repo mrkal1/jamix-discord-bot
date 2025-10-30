@@ -123,8 +123,8 @@ CREATE TABLE IF NOT EXISTS persistent_menus (
 
 ### 2. Database Maintenance
 - Regular cleanup prevents database bloat
-- Automatic cleanup runs on bot startup
-- Manual cleanup available via command
+- **Automatic periodic cleanup** runs every 24 hours (removes menus older than 7 days)
+- Manual cleanup available via `/cleanup_old_menus` command
 
 ### 3. Error Handling
 - Database errors are logged but don't crash the bot

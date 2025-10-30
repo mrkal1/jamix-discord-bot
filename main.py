@@ -298,16 +298,12 @@ async def on_ready():
     except Exception as e:
         print(f"Error registering persistent views: {e}")
     
-    # Cleanup old menus (older than 7 days)
-    try:
-        deleted_count = button_db.cleanup_old_menus(days=7)
-        if deleted_count > 0:
-            print(f"Cleaned up {deleted_count} old menu view(s)")
-    except Exception as e:
-        print(f"Error cleaning up old menus: {e}")
-    
     # Start the daily menu posting task
     daily_menu_post.start()
+    
+    # Start the periodic cleanup task
+    cleanup_old_menus_task.start()
+    print("Started periodic cleanup task (runs every 24 hours)")
 
 @bot.tree.command(name='menu', description='Show the weekly menu (ephemeral for users, public for admins)')
 async def show_menu(interaction: discord.Interaction):
@@ -523,6 +519,24 @@ async def test_daily_posting(interaction: discord.Interaction):
 @daily_menu_post.before_loop
 async def before_daily_menu_post():
     """Wait until bot is ready before starting the daily task"""
+    await bot.wait_until_ready()
+
+@tasks.loop(hours=24)  # Run every 24 hours
+async def cleanup_old_menus_task():
+    """Periodically clean up old persistent menu views from the database"""
+    print("Running periodic database cleanup...")
+    try:
+        deleted_count = button_db.cleanup_old_menus(days=7)
+        if deleted_count > 0:
+            print(f"Periodic cleanup: Removed {deleted_count} old menu view(s)")
+        else:
+            print("Periodic cleanup: No old menus to remove")
+    except Exception as e:
+        print(f"Error during periodic cleanup: {e}")
+
+@cleanup_old_menus_task.before_loop
+async def before_cleanup_task():
+    """Wait until bot is ready before starting the cleanup task"""
     await bot.wait_until_ready()
 
 # Admin Commands

@@ -110,7 +110,7 @@ The bot automatically posts the daily menu at midnight (configurable). Make sure
 The bot implements **dynamically persistent buttons** that survive bot restarts:
 - Daily menu posts maintain interactive buttons even after bot restarts
 - Button states are stored in SQLite database (`bot_data.db`)
-- Automatic cleanup of old menu views (7+ days)
+- **Automatic periodic cleanup** runs every 24 hours (removes menus older than 7 days)
 - Manual cleanup available via `/cleanup_old_menus` command
 
 For detailed implementation information, see [PERSISTENT_BUTTONS.md](PERSISTENT_BUTTONS.md)
