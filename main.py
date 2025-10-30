@@ -270,6 +270,111 @@ async def fetch_menu_data(guild_id = None):
         print(f"Error fetching menu data for Guild {guild_id}: {e}")
         return None
 
+async def handle_menu_navigation(interaction: discord.Interaction, direction: int):
+    """Handle navigation button clicks by loading state from database"""
+    message_id = interaction.message.id if interaction.message else None
+    
+    if not message_id:
+        await interaction.response.send_message("❌ Could not identify message", ephemeral=True)
+        return
+    
+    # Load menu data from database
+    menu_info = button_db.get_menu_view(message_id)
+    
+    if not menu_info:
+        # If not in database, this might be a user's ephemeral message - just respond
+        await interaction.response.send_message("❌ Menu data not found. This might be an expired view.", ephemeral=True)
+        return
+    
+    # Update current day
+    days = list(menu_info['menu_data'].keys())
+    current_day = menu_info['current_day']
+    new_day = (current_day + direction) % len(days)
+    
+    # Save updated state
+    button_db.save_menu_view(
+        message_id,
+        menu_info['guild_id'],
+        menu_info['channel_id'],
+        menu_info['menu_data'],
+        new_day
+    )
+    
+    # Create embed for new day
+    current_day_name = days[new_day]
+    day_menu = menu_info['menu_data'][current_day_name]
+    
+    embed = discord.Embed(
+        title=f"🍽️ Ruokalista - {current_day_name}",
+        color=0x00ff00,
+        timestamp=datetime.now()
+    )
+    
+    # Add menu items by category
+    for category, items in day_menu.items():
+        if items:
+            items_text = "\n".join([f"• {item}" for item in items])
+            embed.add_field(name=f"**{category}**", value=items_text, inline=False)
+    
+    embed.set_footer(text=f"Day {new_day + 1} of {len(days)} | Click buttons to navigate")
+    
+    # Update the message
+    await interaction.response.edit_message(embed=embed)
+
+async def handle_menu_refresh(interaction: discord.Interaction):
+    """Handle refresh button by fetching fresh menu data"""
+    message_id = interaction.message.id if interaction.message else None
+    
+    if not message_id:
+        await interaction.response.send_message("❌ Could not identify message", ephemeral=True)
+        return
+    
+    # Load current menu info from database
+    menu_info = button_db.get_menu_view(message_id)
+    
+    if not menu_info:
+        await interaction.response.send_message("❌ Menu data not found", ephemeral=True)
+        return
+    
+    await interaction.response.defer()
+    
+    # Fetch fresh menu data
+    guild_id = menu_info['guild_id']
+    new_menu_data = await fetch_menu_data(guild_id)
+    
+    if new_menu_data:
+        # Update database with fresh data
+        button_db.save_menu_view(
+            message_id,
+            guild_id,
+            menu_info['channel_id'],
+            new_menu_data,
+            0  # Reset to first day
+        )
+        
+        # Create embed for first day
+        days = list(new_menu_data.keys())
+        current_day_name = days[0]
+        day_menu = new_menu_data[current_day_name]
+        
+        embed = discord.Embed(
+            title=f"🍽️ Ruokalista - {current_day_name}",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        
+        # Add menu items by category
+        for category, items in day_menu.items():
+            if items:
+                items_text = "\n".join([f"• {item}" for item in items])
+                embed.add_field(name=f"**{category}**", value=items_text, inline=False)
+        
+        embed.set_footer(text=f"Day 1 of {len(days)} | Click buttons to navigate | Refreshed")
+        
+        await interaction.edit_original_response(embed=embed)
+    else:
+        await interaction.edit_original_response(content="❌ Failed to refresh menu data.")
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
@@ -281,22 +386,31 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to sync commands: {e}")
     
-    # Register persistent views from database
-    print("Registering persistent views from database...")
+    # Register persistent view handler (without message_id to handle ALL messages)
+    # This creates a persistent listener that loads menu data on-demand from the database
+    print("Registering persistent view handler...")
     try:
-        persistent_menus = button_db.get_all_persistent_menus()
-        for message_id, menu_info in persistent_menus:
-            view = MenuView(
-                menu_info['menu_data'],
-                current_day=menu_info['current_day'],
-                guild_id=menu_info['guild_id'],
-                persistent=True,
-                message_id=message_id
-            )
-            bot.add_view(view, message_id=message_id)
-        print(f"Registered {len(persistent_menus)} persistent menu view(s)")
+        # Create a special persistent view handler that will be called for any button interaction
+        class PersistentMenuView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=None)
+            
+            @discord.ui.button(label='◀️ Edellinen Päivä', style=discord.ButtonStyle.secondary, custom_id="menu:previous_day")
+            async def previous_day(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await handle_menu_navigation(interaction, -1)
+            
+            @discord.ui.button(label='▶️ Seuraava Päivä', style=discord.ButtonStyle.secondary, custom_id="menu:next_day")
+            async def next_day(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await handle_menu_navigation(interaction, 1)
+            
+            @discord.ui.button(label='🔄 Päivitä', style=discord.ButtonStyle.primary, custom_id="menu:refresh_menu")
+            async def refresh_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await handle_menu_refresh(interaction)
+        
+        bot.add_view(PersistentMenuView())
+        print("Registered persistent view handler successfully")
     except Exception as e:
-        print(f"Error registering persistent views: {e}")
+        print(f"Error registering persistent view handler: {e}")
     
     # Start the daily menu posting task
     daily_menu_post.start()
