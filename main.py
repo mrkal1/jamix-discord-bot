@@ -36,7 +36,7 @@ class MenuView(discord.ui.View):
         self.persistent = persistent
         
     @discord.ui.button(label='◀️ Edellinen Päivä', style=discord.ButtonStyle.secondary)
-    async def previous_day(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def previous_day(self, interaction: discord.Interaction, button: discord.ui.Button, custom_id="previous_day"):
         self.current_day = (self.current_day - 1) % len(self.days)
         embed = self.create_menu_embed()
         
@@ -50,7 +50,7 @@ class MenuView(discord.ui.View):
             # This is the original shared message - create ephemeral response
             await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
     
-    @discord.ui.button(label='▶️ Seuraava Päivä', style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label='▶️ Seuraava Päivä', style=discord.ButtonStyle.secondary, custom_id="next_day")
     async def next_day(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_day = (self.current_day + 1) % len(self.days)
         embed = self.create_menu_embed()
@@ -64,8 +64,8 @@ class MenuView(discord.ui.View):
         else:
             # This is the original shared message - create ephemeral response
             await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
-    
-    @discord.ui.button(label='🔄 Päivitä', style=discord.ButtonStyle.primary)
+
+    @discord.ui.button(label='🔄 Päivitä', style=discord.ButtonStyle.primary, custom_id="refresh_menu")
     async def refresh_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Fetch fresh menu data using the guild_id
         guild_id = self.guild_id or (interaction.guild.id if interaction.guild else None)

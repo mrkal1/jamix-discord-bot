@@ -7,4 +7,4 @@ services:
     env_file:
       - .env
     volumes:
-      - ./server_config.json:/app/server_config.json
+      - ./config:/app/config

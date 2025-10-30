@@ -6,7 +6,7 @@ import os
 from typing import Dict, Optional
 
 class ServerConfig:
-    def __init__(self, config_file: str = "server_config.json"):
+    def __init__(self, config_file: str = "config/server_config.json"):
         self.config_file = config_file
         self.config = self._load_config()
     
