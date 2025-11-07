@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import aiohttp
-from datetime import datetime, time, date
+from datetime import datetime, time, date, timedelta
 import zoneinfo
 import os
 from dotenv import load_dotenv
@@ -156,6 +156,86 @@ class MenuView(discord.ui.View):
             if isinstance(item, discord.ui.Button):
                 item.disabled = True
 
+def parse_mealdoo_data(mealdoo_data):
+    """Parse Mealdoo API data into a format suitable for the Discord bot"""
+    parsed_data = {}
+    
+    if not mealdoo_data or not isinstance(mealdoo_data, list):
+        return parsed_data
+    
+    # Get today's date for filtering
+    today = datetime.now().date()
+    
+    # Process each day in the data
+    for day_data in mealdoo_data:
+        if not day_data.get('allSuccessful') or not day_data.get('data'):
+            continue
+        
+        date_str = day_data.get('date', '')
+        if not date_str:
+            continue
+        
+        try:
+            # Parse date string (format: YYYY-MM-DD)
+            day_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            
+            # Skip dates that are in the past (before today)
+            if day_obj < today:
+                print(f"Skipping past date: {day_obj}")
+                continue
+            
+            day_name = day_obj.strftime("%A, %B %d")
+            
+            # Initialize the day's menu
+            parsed_data[day_name] = {}
+            
+            # Process meal options
+            meal_options = day_data.get('data', {}).get('mealOptions', [])
+            for meal_option in meal_options:
+                # Get meal category name (e.g., "Lounas", "Kasvislounas")
+                meal_names = meal_option.get('names', [])
+                meal_name = 'Unknown'
+                for name_obj in meal_names:
+                    if name_obj.get('language') == 'fi':
+                        meal_name = name_obj.get('name', 'Unknown')
+                        break
+                
+                # Process rows (menu items)
+                items = []
+                rows = meal_option.get('rows', [])
+                for row in rows:
+                    # Get item name
+                    names = row.get('names', [])
+                    for name_obj in names:
+                        if name_obj.get('language') == 'fi':
+                            item_name = name_obj.get('name', '').strip()
+                            if item_name and item_name not in ['ESPANJA', '***']:  # Skip category headers
+                                # Get diet info if available
+                                diets_info = row.get('diets', [])
+                                diet_shorts = []
+                                for diet_obj in diets_info:
+                                    if diet_obj.get('language') == 'fi':
+                                        diet_shorts = diet_obj.get('dietShorts', [])
+                                        break
+                                
+                                # Format item with diet info
+                                if diet_shorts:
+                                    item_display = f"{item_name} ({', '.join(diet_shorts)})"
+                                else:
+                                    item_display = item_name
+                                
+                                items.append(item_display)
+                            break
+                
+                if items:  # Only add if there are actual items
+                    parsed_data[day_name][meal_name] = items
+                    
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing Mealdoo date {date_str}: {e}")
+            continue
+    
+    return parsed_data
+
 def parse_jamix_data(jamix_data):
     """Parse Jamix API data into a format suitable for the Discord bot"""
     parsed_data = {}
@@ -234,25 +314,51 @@ def parse_jamix_data(jamix_data):
     return parsed_data
 
 async def fetch_menu_data(guild_id = None):
-    """Fetch menu data from the Jamix API for a specific server"""
+    """Fetch menu data from the API (Jamix or Mealdoo) for a specific server"""
     try:
         async with aiohttp.ClientSession() as session:
             headers = {}
             if FOOD_API_KEY:
                 headers['Authorization'] = f'Bearer {FOOD_API_KEY}'
             
-            # Get the API URL for this specific server
+            # Get configuration to determine API type
+            config = None
+            api_type = "jamix"
+            
+            if guild_id:
+                config = server_config.get_server_config(guild_id)
+                api_type = config.get("api_type", "jamix")
+            
+            # Get the API URL (already formatted for Mealdoo with all dates)
             if guild_id:
                 api_url = server_config.get_menu_url(guild_id)
             else:
                 # Fallback to default URL if no guild specified
                 api_url = "https://fi.jamix.cloud/apps/menuservice/rest/haku/menu/12345/12?lang=fi"
             
-            # Fetch data from the actual Jamix API
+            print(f"Fetching menu from: {api_url}")
+            
+            # Fetch data from the API
             async with session.get(api_url, headers=headers) as response:
                 if response.status == 200:
-                    jamix_data = await response.json()
-                    parsed_data = parse_jamix_data(jamix_data)
+                    api_data = await response.json()
+                    
+                    # Detect API type and use appropriate parser
+                    parsed_data = None
+                    
+                    # Check if it's Mealdoo format (has 'allSuccessful' and 'data' keys)
+                    if isinstance(api_data, list) and len(api_data) > 0:
+                        first_item = api_data[0]
+                        if isinstance(first_item, dict) and 'allSuccessful' in first_item and 'data' in first_item:
+                            print(f"Detected Mealdoo API format - {len(api_data)} day(s) (Guild: {guild_id})")
+                            parsed_data = parse_mealdoo_data(api_data)
+                        # Check if it's Jamix format (has 'menuTypes' or 'days')
+                        elif 'menuTypes' in first_item or 'days' in first_item:
+                            print(f"Detected Jamix API format (Guild: {guild_id})")
+                            parsed_data = parse_jamix_data(api_data)
+                        else:
+                            print(f"Unknown API format (Guild: {guild_id})")
+                            print(f"First item keys: {first_item.keys() if isinstance(first_item, dict) else 'Not a dict'}")
                     
                     if parsed_data:
                         print(f"Successfully fetched menu data for {len(parsed_data)} days (Guild: {guild_id})")
@@ -268,6 +374,8 @@ async def fetch_menu_data(guild_id = None):
             
     except Exception as e:
         print(f"Error fetching menu data for Guild {guild_id}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 async def handle_menu_navigation(interaction: discord.Interaction, direction: int):
@@ -697,13 +805,13 @@ async def set_menu_channel(interaction: discord.Interaction, channel: discord.Te
 
     await interaction.followup.send(f"✅ Päivittäinen ruokalista kanava asetettu {channel.mention} tällä palvelimella.")
 
-@bot.tree.command(name='set_menu_id', description='Set the Jamix customer and kitchen IDs for this server')
+@bot.tree.command(name='set_menu_id', description='Configure API: Jamix (2 IDs) or Mealdoo ("mealdoo" + path)')
 @app_commands.describe(
-    customer_id="The Jamix customer ID for your restaurant",
-    kitchen_id="The Jamix kitchen ID for your restaurant"
+    customer_id='For Jamix: customer ID (numeric). For Mealdoo: type "mealdoo"',
+    kitchen_id="For Jamix: kitchen ID (numeric). For Mealdoo: site path (e.g., org/location)"
 )
 async def set_menu_id(interaction: discord.Interaction, customer_id: str, kitchen_id: str):
-    """Set the Jamix customer and kitchen IDs for this server (Admin only)"""
+    """Set the API configuration for this server - supports both Jamix and Mealdoo (Admin only)"""
     # Check if user has administrator permissions
     if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Sinä tarvitset ylläpitäjäoikeudet käyttääksesi tätä komentoa.", ephemeral=True)
@@ -715,16 +823,24 @@ async def set_menu_id(interaction: discord.Interaction, customer_id: str, kitche
     
     await interaction.response.defer(ephemeral=True)
     
-    # Validate IDs (should be numeric)
-    try:
-        int(customer_id)
-        int(kitchen_id)
-    except ValueError:
-        await interaction.followup.send("❌ Asiakas-ID ja Keittiö-ID täytyy olla numeerisia arvoja.")
-        return
+    # Detect API type
+    is_mealdoo = customer_id.lower() == "mealdoo"
+    
+    if not is_mealdoo:
+        # Validate Jamix IDs (should be numeric)
+        try:
+            int(customer_id)
+            int(kitchen_id)
+        except ValueError:
+            await interaction.followup.send('❌ For Jamix: Both IDs must be numeric.\n💡 For Mealdoo: use "mealdoo" as customer_id and your site path (e.g., org/location) as kitchen_id')
+            return
     
     # Save to configuration
     server_config.set_server_menu(interaction.guild.id, customer_id, kitchen_id)
+    
+    # Get updated config
+    config = server_config.get_server_config(interaction.guild.id)
+    api_type = config.get("api_type", "jamix")
     
     # Test the API with new IDs
     test_url = server_config.get_menu_url(interaction.guild.id)
@@ -734,12 +850,20 @@ async def set_menu_id(interaction: discord.Interaction, customer_id: str, kitche
         color=0x00ff00,
         timestamp=datetime.now()
     )
-    embed.add_field(name="Customer ID", value=customer_id, inline=True)
-    embed.add_field(name="Kitchen ID", value=kitchen_id, inline=True)
-    embed.add_field(name="API URL", value=test_url, inline=False)
+    
+    embed.add_field(name="API Type", value=api_type.upper(), inline=False)
+    
+    if is_mealdoo:
+        embed.add_field(name="Site Path", value=kitchen_id, inline=False)
+    else:
+        embed.add_field(name="Customer ID", value=customer_id, inline=True)
+        embed.add_field(name="Kitchen ID", value=kitchen_id, inline=True)
+    
+    embed.add_field(name="API URL Example", value=test_url[:100] + "..." if len(test_url) > 100 else test_url, inline=False)
     embed.set_footer(text="Use /test_api to verify the configuration works")
     
     await interaction.followup.send(embed=embed)
+
 
 @bot.tree.command(name='show_config', description='Show the current server configuration')
 async def show_config(interaction: discord.Interaction):
@@ -757,6 +881,7 @@ async def show_config(interaction: discord.Interaction):
     
     config = server_config.get_server_config(interaction.guild.id)
     daily_channel_id = config.get("daily_channel_id")
+    api_type = config.get("api_type", "jamix")
     
     embed = discord.Embed(
         title=f"📋 Server Configuration - {interaction.guild.name}",
@@ -764,8 +889,17 @@ async def show_config(interaction: discord.Interaction):
         timestamp=datetime.now()
     )
     
-    embed.add_field(name="Customer ID", value=config.get("customer_id", "Not set"), inline=True)
-    embed.add_field(name="Kitchen ID", value=config.get("kitchen_id", "Not set"), inline=True)
+    # Show API type
+    embed.add_field(name="API Type", value=api_type.upper(), inline=False)
+    
+    # Show relevant IDs based on API type
+    if api_type == "mealdoo":
+        site_path = config.get("site_path", "Not set")
+        embed.add_field(name="Site Path", value=site_path, inline=True)
+    else:
+        embed.add_field(name="Customer ID", value=config.get("customer_id", "Not set"), inline=True)
+        embed.add_field(name="Kitchen ID", value=config.get("kitchen_id", "Not set"), inline=True)
+    
     embed.add_field(name="Language", value=config.get("language", "fi"), inline=True)
     
     if daily_channel_id:
@@ -778,9 +912,13 @@ async def show_config(interaction: discord.Interaction):
         channel_name = "Not set"
     
     embed.add_field(name="Daily Post Channel", value=channel_name, inline=False)
-    embed.add_field(name="API URL", value=server_config.get_menu_url(interaction.guild.id), inline=False)
+    
+    # Show sample API URL (for Mealdoo, show today's URL)
+    api_url = server_config.get_menu_url(interaction.guild.id)
+    embed.add_field(name="API URL Example", value=api_url[:100] + "..." if len(api_url) > 100 else api_url, inline=False)
     
     await interaction.followup.send(embed=embed)
+
 
 @bot.tree.command(name='test_api', description='Test the Jamix API connection and data parsing for this server')
 async def test_api(interaction: discord.Interaction):

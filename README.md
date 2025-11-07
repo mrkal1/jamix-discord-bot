@@ -64,31 +64,59 @@ A Discord bot that posts daily food menus from an API with interactive day navig
 
 ## API Integration
 
-The bot is designed to work with any food menu API. To integrate with your API:
+The bot supports multiple food menu API providers and automatically detects the API format:
 
-1. Replace the `FOOD_API_BASE_URL` in `main.py` with your API endpoint
-2. Modify the `fetch_menu_data()` function to match your API's response format
+### Supported APIs
+
+1. **Jamix API** - Finnish school lunch and restaurant menu system
+2. **Mealdoo API** - Modern food service platform (Poweresta/Mealdoo)
+
+The bot automatically detects which API format is being used based on the response structure.
+
+### Setting Up Your API
+
+#### For Jamix API:
+1. Find your restaurant's customer ID and kitchen ID
+2. Use the `/set_menu_id` command to configure: `/set_menu_id <customer_id> <kitchen_id>`
+3. The API URL format: `https://fi.jamix.cloud/apps/menuservice/rest/haku/menu/{customer_id}/{kitchen_id}?lang=fi`
+
+#### For Mealdoo/Poweresta API:
+1. Find your restaurant's site path (e.g., `org/location`)
+2. Use the `/set_menu_id` command: `/set_menu_id mealdoo <site_path>`
+3. The API URL format: `https://api.fi.poweresta.com/publicmenu/dates/{site_path}/?menu=Ruokalista&dates=YYYY-MM-DD,YYYY-MM-DD,...`
+
+**Example for Mealdoo:**
+```
+/set_menu_id mealdoo org/location
+```
+
+### Custom API Integration
+
+To integrate with your own API:
+
+1. Create a new parser function in `main.py` similar to `parse_jamix_data()` or `parse_mealdoo_data()`
+2. Add detection logic in `fetch_menu_data()` to identify your API format
 3. Update the data structure to match your menu format
 
-### Expected Data Format
+### Expected Data Format (Internal)
 
-The bot expects menu data in the following format:
+After parsing, the bot uses this internal format:
 
 ```json
 {
-  "Monday": {
-    "Breakfast": ["Item 1", "Item 2", "Item 3"],
-    "Lunch": ["Item 1", "Item 2", "Item 3"],
-    "Dinner": ["Item 1", "Item 2", "Item 3"]
+  "Monday, November 07": {
+    "Lounas": ["Ylikypsää possua (G, L)", "Kermaperunat (G, L)"],
+    "Kasvislounas": ["Tomaattinen härkispata (G, L, M)", "Kermaperunat (G, L)"]
   },
-  "Tuesday": {
-    "Breakfast": ["Item 1", "Item 2", "Item 3"],
-    "Lunch": ["Item 1", "Item 2", "Item 3"],
-    "Dinner": ["Item 1", "Item 2", "Item 3"]
+  "Tuesday, November 08": {
+    "Lounas": ["Item 1", "Item 2"],
+    "Kasvislounas": ["Item 1", "Item 2"]
   }
   // ... more days
 }
 ```
+
+**Note:** Diet codes (G=Gluteeniton/Gluten-free, L=Laktoositon/Lactose-free, M=Maidoton/Dairy-free) are automatically included from Mealdoo API.
 
 ## Usage
 
