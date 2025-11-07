@@ -679,7 +679,7 @@ async def daily_menu_post():
         try:
             menu_data = await fetch_menu_data(guild_id)
             if not menu_data:
-                await channel.send("❌ Ei voitu noutaa tämän päivän ruokalistaa.")
+                """ await channel.send("❌ Ei voitu noutaa tämän päivän ruokalistaa.") """
                 continue
             # Use local time for menu matching
             local_tz = zoneinfo.ZoneInfo("Europe/Helsinki")  # Finnish time with DST support
