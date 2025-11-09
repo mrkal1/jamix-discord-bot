@@ -682,7 +682,7 @@ async def show_menu(interaction: discord.Interaction):
 
 @bot.tree.command(name='today', description='Show today\'s menu')
 async def todays_menu(interaction: discord.Interaction):
-    """Show today's menu"""
+    """Show today's menu (or next available menu)"""
     guild_id = interaction.guild.id if interaction.guild else None
     
     await interaction.response.defer(ephemeral=True)
@@ -693,38 +693,21 @@ async def todays_menu(interaction: discord.Interaction):
         await interaction.followup.send("❌ Ei voitu noutaa ruokalistaa tällä hetkellä. Yritä myöhemmin uudelleen.")
         return
     
-    # Try to find today's menu by matching the exact date
+    # Since menu_data already has past dates filtered out, just get the first available day
+    # This works whether we got current week or next week from the retry logic
+    days = list(menu_data.keys())
+    if not days:
+        await interaction.followup.send("❌ Ei ruokalistaa saatavilla.")
+        return
+    
+    # Get the first available day (which is the earliest future date)
+    found_day_name = days[0]
+    found_menu = menu_data[found_day_name]
+    
+    # Check if this is actually today
     today = datetime.now()
-    today_str = today.strftime("%A, %B %d")  # Format: "Thursday, August 22"
-    
-    # First try to find an exact match
-    found_menu = None
-    found_day_name = None
-    
-    if today_str in menu_data:
-        found_menu = menu_data[today_str]
-        found_day_name = today_str
-    else:
-        # If no exact match, look for the next available day starting from today
-        for day_name, day_menu in menu_data.items():
-            # Parse the day name to get the date
-            try:
-                # Extract date from "Thursday, August 22" format
-                day_parts = day_name.split(", ")
-                if len(day_parts) == 2:
-                    month_day = day_parts[1]
-                    # Create a date string and parse it
-                    current_year = today.year
-                    day_date_str = f"{month_day}, {current_year}"
-                    day_date = datetime.strptime(day_date_str, "%B %d, %Y").date()
-                    
-                    # If this is today or a future date, use it
-                    if day_date >= today.date():
-                        found_menu = day_menu
-                        found_day_name = day_name
-                        break
-            except (ValueError, IndexError):
-                continue
+    today_str = today.strftime("%A, %B %d")
+    is_today = (found_day_name == today_str)
     
     if found_menu and found_day_name:
         embed = discord.Embed(
@@ -734,8 +717,8 @@ async def todays_menu(interaction: discord.Interaction):
         )
         
         # Add a note if this isn't actually today
-        if found_day_name != today_str:
-            embed.description = f"*Today's menu not available. Showing next available menu.*"
+        if not is_today:
+            embed.description = f"*Tämän päivän ruokalistaa ei saatavilla. Näytetään seuraava saatavilla oleva ruokalista.*"
         
         for category, items in found_menu.items():
             if items:
@@ -788,34 +771,23 @@ async def daily_menu_post():
             if not menu_data:
                 """ await channel.send("❌ Ei voitu noutaa tämän päivän ruokalistaa.") """
                 continue
-            # Use local time for menu matching
-            local_tz = zoneinfo.ZoneInfo("Europe/Helsinki")  # Finnish time with DST support
+            
+            # Since menu_data already has past dates filtered out, just get the first available day
+            # This works whether we got current week or next week from the retry logic
+            days = list(menu_data.keys())
+            if not days:
+                print(f"No menu days available for guild {guild_id}")
+                continue
+            
+            # Get the first available day (which is the earliest future date)
+            found_day_name = days[0]
+            found_menu = menu_data[found_day_name]
+            
+            # Check if this is actually today
+            local_tz = zoneinfo.ZoneInfo("Europe/Helsinki")
             today = datetime.now(local_tz)
-            today_str = today.strftime("%A, %B %d")  # Format: "Thursday, August 22"
-            
-            found_menu = None
-            found_day_name = None
-            
-            if today_str in menu_data:
-                found_menu = menu_data[today_str]
-                found_day_name = today_str
-            else:
-                # If no exact match, look for the next available day
-                for day_name, day_menu in menu_data.items():
-                    try:
-                        day_parts = day_name.split(", ")
-                        if len(day_parts) == 2:
-                            month_day = day_parts[1]
-                            current_year = today.year
-                            day_date_str = f"{month_day}, {current_year}"
-                            day_date = datetime.strptime(day_date_str, "%B %d, %Y").date()
-                            
-                            if day_date >= today.date():
-                                found_menu = day_menu
-                                found_day_name = day_name
-                                break
-                    except (ValueError, IndexError):
-                        continue
+            today_str = today.strftime("%A, %B %d")
+            is_today = (found_day_name == today_str)
             
             if found_menu and found_day_name:
                 # Find the index of the menu for the view
@@ -830,7 +802,7 @@ async def daily_menu_post():
                 embed = view.create_menu_embed()
                 
                 message = f"**Ruokalista {found_day_name}:**"
-                if found_day_name != today_str:
+                if not is_today:
                     message = f"**Tämän päivän ruokalista ei saatavilla, näytetään {found_day_name}:**"
 
                 sent_message = await channel.send(message, embed=embed, view=view)
