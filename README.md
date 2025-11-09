@@ -70,6 +70,7 @@ The bot supports multiple food menu API providers and automatically detects the 
 
 1. **Jamix API** - Finnish school lunch and restaurant menu system
 2. **Mealdoo API** - Modern food service platform (Poweresta/Mealdoo)
+3. **Compass Group API** - Compass Group Finland menu system
 
 The bot automatically detects which API format is being used based on the response structure.
 
@@ -88,6 +89,16 @@ The bot automatically detects which API format is being used based on the respon
 **Example for Mealdoo:**
 ```
 /set_menu_id mealdoo org/location
+```
+
+#### For Compass Group API:
+1. Find your restaurant's cost center ID (e.g., `1234`)
+2. Use the `/set_menu_id` command: `/set_menu_id compass <cost_center>`
+3. The API URL format: `https://www.compass-group.fi/menuapi/week-menus?costCenter={cost_center}&date=YYYY-MM-DD&language=fi`
+
+**Example for Compass Group:**
+```
+/set_menu_id compass 1234
 ```
 
 ### Custom API Integration

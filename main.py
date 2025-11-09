@@ -313,8 +313,72 @@ def parse_jamix_data(jamix_data):
     
     return parsed_data
 
+def parse_compass_data(compass_data):
+    """Parse Compass Group API data into a format suitable for the Discord bot"""
+    parsed_data = {}
+    
+    if not compass_data or not isinstance(compass_data, dict):
+        return parsed_data
+    
+    # Get today's date for filtering
+    today = datetime.now().date()
+    
+    # Process each day's menu
+    menus = compass_data.get('menus', [])
+    for day_data in menus:
+        date_str = day_data.get('date', '')
+        if not date_str:
+            continue
+        
+        try:
+            # Parse date string (format: YYYY-MM-DDTHH:MM:SS)
+            day_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
+            
+            # Skip dates that are in the past (before today)
+            if day_obj < today:
+                continue
+            
+            # Format day name
+            day_name = day_obj.strftime("%A, %B %d")
+            
+            # Initialize the day's menu
+            parsed_data[day_name] = {}
+            
+            # Process menu packages (categories like "KASVISLOUNAS", "KEITTOLOUNAS", etc.)
+            menu_packages = day_data.get('menuPackages', [])
+            for package in menu_packages:
+                category_name = package.get('name', 'Menu')
+                meals = package.get('meals', [])
+                
+                if meals:
+                    # Initialize category if not exists
+                    if category_name not in parsed_data[day_name]:
+                        parsed_data[day_name][category_name] = []
+                    
+                    # Process each meal
+                    for meal in meals:
+                        meal_name = meal.get('name', '').strip()
+                        if not meal_name:
+                            continue
+                        
+                        # Get diet information
+                        diets = meal.get('diets', [])
+                        if diets:
+                            # Filter out asterisk and format diet codes
+                            diet_codes = [d for d in diets if d != '*']
+                            if diet_codes:
+                                meal_name = f"{meal_name} ({', '.join(diet_codes)})"
+                        
+                        parsed_data[day_name][category_name].append(meal_name)
+        
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing Compass date {date_str}: {e}")
+            continue
+    
+    return parsed_data
+
 async def fetch_menu_data(guild_id = None):
-    """Fetch menu data from the API (Jamix or Mealdoo) for a specific server"""
+    """Fetch menu data from the API (Jamix, Mealdoo, or Compass Group) for a specific server"""
     try:
         async with aiohttp.ClientSession() as session:
             headers = {}
@@ -329,7 +393,7 @@ async def fetch_menu_data(guild_id = None):
                 config = server_config.get_server_config(guild_id)
                 api_type = config.get("api_type", "jamix")
             
-            # Get the API URL (already formatted for Mealdoo with all dates)
+            # Get the API URL (already formatted for Mealdoo/Compass with parameters)
             if guild_id:
                 api_url = server_config.get_menu_url(guild_id)
             else:
@@ -346,8 +410,12 @@ async def fetch_menu_data(guild_id = None):
                     # Detect API type and use appropriate parser
                     parsed_data = None
                     
+                    # Check if it's Compass Group format (dict with 'weekNumber' and 'menus')
+                    if isinstance(api_data, dict) and 'weekNumber' in api_data and 'menus' in api_data:
+                        print(f"Detected Compass Group API format (Guild: {guild_id})")
+                        parsed_data = parse_compass_data(api_data)
                     # Check if it's Mealdoo format (has 'allSuccessful' and 'data' keys)
-                    if isinstance(api_data, list) and len(api_data) > 0:
+                    elif isinstance(api_data, list) and len(api_data) > 0:
                         first_item = api_data[0]
                         if isinstance(first_item, dict) and 'allSuccessful' in first_item and 'data' in first_item:
                             print(f"Detected Mealdoo API format - {len(api_data)} day(s) (Guild: {guild_id})")
@@ -805,13 +873,13 @@ async def set_menu_channel(interaction: discord.Interaction, channel: discord.Te
 
     await interaction.followup.send(f"✅ Päivittäinen ruokalista kanava asetettu {channel.mention} tällä palvelimella.")
 
-@bot.tree.command(name='set_menu_id', description='Configure API: Jamix (2 IDs) or Mealdoo ("mealdoo" + path)')
+@bot.tree.command(name='set_menu_id', description='Configure API: Jamix (2 IDs), Mealdoo, or Compass')
 @app_commands.describe(
-    customer_id='For Jamix: customer ID (numeric). For Mealdoo: type "mealdoo"',
-    kitchen_id="For Jamix: kitchen ID (numeric). For Mealdoo: site path (e.g., org/location)"
+    customer_id='For Jamix: customer ID. For Mealdoo: "mealdoo". For Compass: "compass"',
+    kitchen_id="For Jamix: kitchen ID. For Mealdoo: site path. For Compass: cost center"
 )
 async def set_menu_id(interaction: discord.Interaction, customer_id: str, kitchen_id: str):
-    """Set the API configuration for this server - supports both Jamix and Mealdoo (Admin only)"""
+    """Set the API configuration for this server - supports Jamix, Mealdoo, and Compass Group (Admin only)"""
     # Check if user has administrator permissions
     if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Sinä tarvitset ylläpitäjäoikeudet käyttääksesi tätä komentoa.", ephemeral=True)
@@ -825,14 +893,15 @@ async def set_menu_id(interaction: discord.Interaction, customer_id: str, kitche
     
     # Detect API type
     is_mealdoo = customer_id.lower() == "mealdoo"
+    is_compass = customer_id.lower() == "compass"
     
-    if not is_mealdoo:
+    if not is_mealdoo and not is_compass:
         # Validate Jamix IDs (should be numeric)
         try:
             int(customer_id)
             int(kitchen_id)
         except ValueError:
-            await interaction.followup.send('❌ For Jamix: Both IDs must be numeric.\n💡 For Mealdoo: use "mealdoo" as customer_id and your site path (e.g., org/location) as kitchen_id')
+            await interaction.followup.send('❌ For Jamix: Both IDs must be numeric.\n💡 For Mealdoo: use "mealdoo" as customer_id and site path as kitchen_id\n💡 For Compass: use "compass" as customer_id and cost center as kitchen_id')
             return
     
     # Save to configuration
@@ -855,6 +924,8 @@ async def set_menu_id(interaction: discord.Interaction, customer_id: str, kitche
     
     if is_mealdoo:
         embed.add_field(name="Site Path", value=kitchen_id, inline=False)
+    elif is_compass:
+        embed.add_field(name="Cost Center", value=kitchen_id, inline=False)
     else:
         embed.add_field(name="Customer ID", value=customer_id, inline=True)
         embed.add_field(name="Kitchen ID", value=kitchen_id, inline=True)
@@ -896,6 +967,9 @@ async def show_config(interaction: discord.Interaction):
     if api_type == "mealdoo":
         site_path = config.get("site_path", "Not set")
         embed.add_field(name="Site Path", value=site_path, inline=True)
+    elif api_type == "compass":
+        cost_center = config.get("cost_center", "Not set")
+        embed.add_field(name="Cost Center", value=cost_center, inline=True)
     else:
         embed.add_field(name="Customer ID", value=config.get("customer_id", "Not set"), inline=True)
         embed.add_field(name="Kitchen ID", value=config.get("kitchen_id", "Not set"), inline=True)

@@ -30,11 +30,12 @@ class ServerConfig:
         return {
             "servers": {},
             "default_menu_config": {
-                "api_type": "jamix",  # "jamix" or "mealdoo"
+                "api_type": "jamix",  # "jamix", "mealdoo", or "compass"
                 "customer_id": "12345",
                 "kitchen_id": "12",
                 "site_id": None,  # Deprecated - use site_path for Mealdoo
                 "site_path": None,  # For Mealdoo API (e.g., "org/location")
+                "cost_center": None,  # For Compass Group API (e.g., "1234")
                 "daily_post_time": "07:00",
                 "daily_channel_id": None,
                 "language": "fi"
@@ -65,17 +66,27 @@ class ServerConfig:
         return self.config["servers"][guild_str]
     
     def set_server_menu(self, guild_id: int, customer_id: str, kitchen_id: str) -> None:
-        """Set menu IDs for a server (Jamix API or Mealdoo API)"""
+        """Set menu IDs for a server (Jamix API, Mealdoo API, or Compass Group API)"""
         guild_str = str(guild_id)
         server_config = self.get_server_config(guild_id)
         
-        # Detect if this is Mealdoo setup (customer_id is "mealdoo")
+        # Detect API type
         if customer_id.lower() == "mealdoo":
+            # Mealdoo setup
             server_config["api_type"] = "mealdoo"
             server_config["site_path"] = kitchen_id  # kitchen_id is actually the path like "org/location"
             server_config["customer_id"] = None
             server_config["kitchen_id"] = None
             server_config["site_id"] = None
+            server_config["cost_center"] = None
+        elif customer_id.lower() == "compass":
+            # Compass Group setup
+            server_config["api_type"] = "compass"
+            server_config["cost_center"] = kitchen_id  # kitchen_id is actually the cost center
+            server_config["customer_id"] = None
+            server_config["kitchen_id"] = None
+            server_config["site_id"] = None
+            server_config["site_path"] = None
         else:
             # Jamix setup
             server_config["api_type"] = "jamix"
@@ -83,6 +94,7 @@ class ServerConfig:
             server_config["kitchen_id"] = kitchen_id
             server_config["site_id"] = None
             server_config["site_path"] = None
+            server_config["cost_center"] = None
         
         self.config["servers"][guild_str] = server_config
         self.save_config()
@@ -96,7 +108,7 @@ class ServerConfig:
         self.save_config()
     
     def get_menu_url(self, guild_id: int) -> str:
-        """Get the API URL for a server (Jamix or Mealdoo)"""
+        """Get the API URL for a server (Jamix, Mealdoo, or Compass Group)"""
         config = self.get_server_config(guild_id)
         api_type = config.get("api_type", "jamix")
         language = config.get("language", "fi")
@@ -113,6 +125,12 @@ class ServerConfig:
             
             dates_param = ",".join(dates)
             return f"https://api.fi.poweresta.com/publicmenu/dates/{site_path}/?menu=Ruokalista&dates={dates_param}"
+        elif api_type == "compass":
+            # Compass Group API format
+            cost_center = config.get("cost_center", "1234")
+            today = datetime.now()
+            date_str = f"{today.year}-{today.month:02d}-{today.day:02d}"
+            return f"https://www.compass-group.fi/menuapi/week-menus?costCenter={cost_center}&date={date_str}&language={language}"
         else:
             # Jamix API format
             customer_id = config.get("customer_id", "12345")
