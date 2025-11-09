@@ -107,8 +107,13 @@ class ServerConfig:
         self.config["servers"][guild_str] = server_config
         self.save_config()
     
-    def get_menu_url(self, guild_id: int) -> str:
-        """Get the API URL for a server (Jamix, Mealdoo, or Compass Group)"""
+    def get_menu_url(self, guild_id: int, target_date: Optional[datetime] = None) -> str:
+        """Get the API URL for a server (Jamix, Mealdoo, or Compass Group)
+        
+        Args:
+            guild_id: The guild ID
+            target_date: Optional target date for the menu (defaults to today)
+        """
         config = self.get_server_config(guild_id)
         api_type = config.get("api_type", "jamix")
         language = config.get("language", "fi")
@@ -117,10 +122,10 @@ class ServerConfig:
             # Mealdoo API format with query parameters
             site_path = config.get("site_path", "org/location")
             # Get dates for next 7 days as comma-separated string
-            today = datetime.now()
+            start_date = target_date if target_date else datetime.now()
             dates = []
             for i in range(7):
-                day = today if i == 0 else (today + timedelta(days=i))
+                day = start_date if i == 0 else (start_date + timedelta(days=i))
                 dates.append(f"{day.year}-{day.month:02d}-{day.day:02d}")
             
             dates_param = ",".join(dates)
@@ -128,8 +133,8 @@ class ServerConfig:
         elif api_type == "compass":
             # Compass Group API format
             cost_center = config.get("cost_center", "1234")
-            today = datetime.now()
-            date_str = f"{today.year}-{today.month:02d}-{today.day:02d}"
+            use_date = target_date if target_date else datetime.now()
+            date_str = f"{use_date.year}-{use_date.month:02d}-{use_date.day:02d}"
             return f"https://www.compass-group.fi/menuapi/week-menus?costCenter={cost_center}&date={date_str}&language={language}"
         else:
             # Jamix API format

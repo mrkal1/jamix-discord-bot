@@ -377,8 +377,13 @@ def parse_compass_data(compass_data):
     
     return parsed_data
 
-async def fetch_menu_data(guild_id = None):
-    """Fetch menu data from the API (Jamix, Mealdoo, or Compass Group) for a specific server"""
+async def fetch_menu_data(guild_id = None, retry_next_week = True):
+    """Fetch menu data from the API (Jamix, Mealdoo, or Compass Group) for a specific server
+    
+    Args:
+        guild_id: The guild ID to fetch menu for
+        retry_next_week: If True, will try next week's menu if current week has no valid dates
+    """
     try:
         async with aiohttp.ClientSession() as session:
             headers = {}
@@ -428,7 +433,41 @@ async def fetch_menu_data(guild_id = None):
                             print(f"Unknown API format (Guild: {guild_id})")
                             print(f"First item keys: {first_item.keys() if isinstance(first_item, dict) else 'Not a dict'}")
                     
-                    if parsed_data:
+                    # Check if parsed_data is empty (all dates were in the past)
+                    if parsed_data and len(parsed_data) == 0 and retry_next_week and guild_id:
+                        # Retry for Compass (weekly menus) and Mealdoo APIs
+                        if api_type == "compass":
+                            print(f"Current week menu has no valid dates, trying next week... (Guild: {guild_id})")
+                            # Try next Monday (7 days from now)
+                            next_week = datetime.now() + timedelta(days=7)
+                            next_week_url = server_config.get_menu_url(guild_id, next_week)
+                            
+                            print(f"Fetching next week's menu from: {next_week_url}")
+                            async with session.get(next_week_url, headers=headers) as next_response:
+                                if next_response.status == 200:
+                                    next_api_data = await next_response.json()
+                                    if isinstance(next_api_data, dict) and 'weekNumber' in next_api_data and 'menus' in next_api_data:
+                                        parsed_data = parse_compass_data(next_api_data)
+                                        if parsed_data:
+                                            print(f"Successfully fetched next week's menu for {len(parsed_data)} days (Guild: {guild_id})")
+                        elif api_type == "mealdoo":
+                            print(f"Current dates have no valid menu, trying next week... (Guild: {guild_id})")
+                            # Try next week (7 days from now)
+                            next_week = datetime.now() + timedelta(days=7)
+                            next_week_url = server_config.get_menu_url(guild_id, next_week)
+                            
+                            print(f"Fetching next week's menu from: {next_week_url}")
+                            async with session.get(next_week_url, headers=headers) as next_response:
+                                if next_response.status == 200:
+                                    next_api_data = await next_response.json()
+                                    if isinstance(next_api_data, list) and len(next_api_data) > 0:
+                                        first_item = next_api_data[0]
+                                        if isinstance(first_item, dict) and 'allSuccessful' in first_item and 'data' in first_item:
+                                            parsed_data = parse_mealdoo_data(next_api_data)
+                                            if parsed_data:
+                                                print(f"Successfully fetched next week's menu for {len(parsed_data)} days (Guild: {guild_id})")
+                    
+                    if parsed_data and len(parsed_data) > 0:
                         print(f"Successfully fetched menu data for {len(parsed_data)} days (Guild: {guild_id})")
                         return parsed_data
                     else:
