@@ -22,28 +22,44 @@ class ButtonDatabase:
                 channel_id INTEGER NOT NULL,
                 menu_data TEXT NOT NULL,
                 current_day INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                all_menus_json TEXT,
+                current_source INTEGER DEFAULT 0
             )
         ''')
+
+        # Migrate: add new columns to existing databases that don't have them yet
+        existing_columns = [row[1] for row in cursor.execute("PRAGMA table_info(persistent_menus)").fetchall()]
+        if "all_menus_json" not in existing_columns:
+            cursor.execute("ALTER TABLE persistent_menus ADD COLUMN all_menus_json TEXT")
+            print("Database migrated: added all_menus_json column")
+        if "current_source" not in existing_columns:
+            cursor.execute("ALTER TABLE persistent_menus ADD COLUMN current_source INTEGER DEFAULT 0")
+            print("Database migrated: added current_source column")
         
         conn.commit()
         conn.close()
         print("Database initialized successfully")
     
-    def save_menu_view(self, message_id: int, guild_id: int, channel_id: int, 
-                       menu_data: dict, current_day: int = 0):
-        """Save a persistent menu view to the database"""
+    def save_menu_view(self, message_id: int, guild_id: int, channel_id: int,
+                       menu_data: dict, current_day: int = 0,
+                       all_menus_data: Optional[Dict] = None, current_source: int = 0):
+        """Save a persistent menu view to the database.
+        
+        all_menus_data: dict of {source_name: {day: {category: [items]}}} for multi-source views.
+        current_source: index of the currently-selected source.
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Convert menu_data to JSON string
         menu_json = json.dumps(menu_data)
+        all_menus_json = json.dumps(all_menus_data) if all_menus_data is not None else None
         
         cursor.execute('''
             INSERT OR REPLACE INTO persistent_menus 
-            (message_id, guild_id, channel_id, menu_data, current_day)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (message_id, guild_id, channel_id, menu_json, current_day))
+            (message_id, guild_id, channel_id, menu_data, current_day, all_menus_json, current_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (message_id, guild_id, channel_id, menu_json, current_day, all_menus_json, current_source))
         
         conn.commit()
         conn.close()
@@ -55,7 +71,7 @@ class ButtonDatabase:
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT guild_id, channel_id, menu_data, current_day 
+            SELECT guild_id, channel_id, menu_data, current_day, all_menus_json, current_source
             FROM persistent_menus 
             WHERE message_id = ?
         ''', (message_id,))
@@ -64,13 +80,16 @@ class ButtonDatabase:
         conn.close()
         
         if result:
-            guild_id, channel_id, menu_json, current_day = result
+            guild_id, channel_id, menu_json, current_day, all_menus_json, current_source = result
             menu_data = json.loads(menu_json)
+            all_menus_data = json.loads(all_menus_json) if all_menus_json else None
             return {
                 'guild_id': guild_id,
                 'channel_id': channel_id,
                 'menu_data': menu_data,
-                'current_day': current_day
+                'current_day': current_day,
+                'all_menus_data': all_menus_data,
+                'current_source': current_source or 0,
             }
         return None
     
@@ -80,19 +99,22 @@ class ButtonDatabase:
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT message_id, guild_id, channel_id, menu_data, current_day 
+            SELECT message_id, guild_id, channel_id, menu_data, current_day, all_menus_json, current_source
             FROM persistent_menus
         ''')
         
         results = []
         for row in cursor.fetchall():
-            message_id, guild_id, channel_id, menu_json, current_day = row
+            message_id, guild_id, channel_id, menu_json, current_day, all_menus_json, current_source = row
             menu_data = json.loads(menu_json)
+            all_menus_data = json.loads(all_menus_json) if all_menus_json else None
             results.append((message_id, {
                 'guild_id': guild_id,
                 'channel_id': channel_id,
                 'menu_data': menu_data,
-                'current_day': current_day
+                'current_day': current_day,
+                'all_menus_data': all_menus_data,
+                'current_source': current_source or 0,
             }))
         
         conn.close()

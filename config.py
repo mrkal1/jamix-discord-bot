@@ -1,11 +1,11 @@
 """
 Configuration management for multi-server Discord bot
-Supports both Jamix and Mealdoo API formats
+Supports both Jamix and Mealdoo API formats, and multiple API sources per server
 """
 import json
 import os
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 class ServerConfig:
     def __init__(self, config_file: str = "config/server_config.json"):
@@ -65,39 +65,127 @@ class ServerConfig:
         
         return self.config["servers"][guild_str]
     
-    def set_server_menu(self, guild_id: int, customer_id: str, kitchen_id: str) -> None:
-        """Set menu IDs for a server (Jamix API, Mealdoo API, or Compass Group API)"""
+    def set_server_menu(self, guild_id: int, customer_id: str, kitchen_id: str, source_name: str = "Ruokalista") -> None:
+        """Set menu IDs for a server (Jamix API, Mealdoo API, or Compass Group API).
+        Updates the primary source (first in menu_sources list) or adds it if not present."""
         guild_str = str(guild_id)
         server_config = self.get_server_config(guild_id)
-        
+        language = server_config.get("language", "fi")
+
         # Detect API type
         if customer_id.lower() == "mealdoo":
-            # Mealdoo setup
             server_config["api_type"] = "mealdoo"
-            server_config["site_path"] = kitchen_id  # kitchen_id is actually the path like "org/location"
+            server_config["site_path"] = kitchen_id
             server_config["customer_id"] = None
             server_config["kitchen_id"] = None
             server_config["site_id"] = None
             server_config["cost_center"] = None
+            new_source = {"name": source_name, "api_type": "mealdoo", "site_path": kitchen_id, "language": language}
         elif customer_id.lower() == "compass":
-            # Compass Group setup
             server_config["api_type"] = "compass"
-            server_config["cost_center"] = kitchen_id  # kitchen_id is actually the cost center
+            server_config["cost_center"] = kitchen_id
             server_config["customer_id"] = None
             server_config["kitchen_id"] = None
             server_config["site_id"] = None
             server_config["site_path"] = None
+            new_source = {"name": source_name, "api_type": "compass", "cost_center": kitchen_id, "language": language}
         else:
-            # Jamix setup
             server_config["api_type"] = "jamix"
             server_config["customer_id"] = customer_id
             server_config["kitchen_id"] = kitchen_id
             server_config["site_id"] = None
             server_config["site_path"] = None
             server_config["cost_center"] = None
-        
+            new_source = {"name": source_name, "api_type": "jamix", "customer_id": customer_id, "kitchen_id": kitchen_id, "language": language}
+
+        # Sync into menu_sources: replace the source with the same name, or replace index 0
+        sources = server_config.get("menu_sources", [])
+        replaced = False
+        for i, s in enumerate(sources):
+            if s.get("name") == source_name:
+                sources[i] = new_source
+                replaced = True
+                break
+        if not replaced:
+            if sources:
+                sources[0] = new_source  # Replace primary source
+            else:
+                sources.append(new_source)
+        server_config["menu_sources"] = sources
+
         self.config["servers"][guild_str] = server_config
         self.save_config()
+
+    def get_menu_sources(self, guild_id: int) -> List[Dict]:
+        """Get all menu sources for a server. Migrates from legacy single-source config if needed."""
+        config = self.get_server_config(guild_id)
+        sources = config.get("menu_sources")
+        if sources:
+            return sources
+
+        # Backward-compat: build a single source from the old flat config
+        api_type = config.get("api_type", "jamix")
+        language = config.get("language", "fi")
+        source: Dict = {"name": "Ruokalista", "api_type": api_type, "language": language}
+        if api_type == "mealdoo":
+            source["site_path"] = config.get("site_path", "org/location")
+        elif api_type == "compass":
+            source["cost_center"] = config.get("cost_center", "1234")
+        else:
+            source["customer_id"] = config.get("customer_id", "12345")
+            source["kitchen_id"] = config.get("kitchen_id", "12")
+        return [source]
+
+    def add_menu_source(self, guild_id: int, name: str, customer_id: str, kitchen_id: str) -> None:
+        """Add or replace a named menu source for a server."""
+        guild_str = str(guild_id)
+        config = self.get_server_config(guild_id)
+        language = config.get("language", "fi")
+
+        # Ensure menu_sources exists (migrate if needed)
+        if "menu_sources" not in config:
+            config["menu_sources"] = self.get_menu_sources(guild_id)
+
+        is_mealdoo = customer_id.lower() == "mealdoo"
+        is_compass = customer_id.lower() == "compass"
+
+        if is_mealdoo:
+            source = {"name": name, "api_type": "mealdoo", "site_path": kitchen_id, "language": language}
+        elif is_compass:
+            source = {"name": name, "api_type": "compass", "cost_center": kitchen_id, "language": language}
+        else:
+            source = {"name": name, "api_type": "jamix", "customer_id": customer_id, "kitchen_id": kitchen_id, "language": language}
+
+        # Replace existing source with the same name, or append
+        replaced = False
+        for i, s in enumerate(config["menu_sources"]):
+            if s.get("name") == name:
+                config["menu_sources"][i] = source
+                replaced = True
+                break
+        if not replaced:
+            config["menu_sources"].append(source)
+
+        self.config["servers"][guild_str] = config
+        self.save_config()
+
+    def remove_menu_source(self, guild_id: int, name: str) -> bool:
+        """Remove a named menu source. Returns True if removed, False if not found."""
+        guild_str = str(guild_id)
+        config = self.get_server_config(guild_id)
+
+        if "menu_sources" not in config:
+            config["menu_sources"] = self.get_menu_sources(guild_id)
+
+        before = len(config["menu_sources"])
+        config["menu_sources"] = [s for s in config["menu_sources"] if s.get("name") != name]
+        after = len(config["menu_sources"])
+
+        if before != after:
+            self.config["servers"][guild_str] = config
+            self.save_config()
+            return True
+        return False
     
     def set_daily_channel(self, guild_id: int, channel_id: int) -> None:
         """Set daily posting channel for a server"""
@@ -107,40 +195,40 @@ class ServerConfig:
         self.config["servers"][guild_str] = server_config
         self.save_config()
     
-    def get_menu_url(self, guild_id: int, target_date: Optional[datetime] = None) -> str:
-        """Get the API URL for a server (Jamix, Mealdoo, or Compass Group)
-        
-        Args:
-            guild_id: The guild ID
-            target_date: Optional target date for the menu (defaults to today)
-        """
-        config = self.get_server_config(guild_id)
-        api_type = config.get("api_type", "jamix")
-        language = config.get("language", "fi")
-        
+    def get_menu_url_for_source(self, source: Dict, target_date: Optional[datetime] = None) -> str:
+        """Get the API URL for a given source config dict."""
+        api_type = source.get("api_type", "jamix")
+        language = source.get("language", "fi")
+
         if api_type == "mealdoo":
-            # Mealdoo API format with query parameters
-            site_path = config.get("site_path", "org/location")
-            # Get dates for next 7 days as comma-separated string
+            site_path = source.get("site_path", "org/location")
             start_date = target_date if target_date else datetime.now()
             dates = []
             for i in range(7):
-                day = start_date if i == 0 else (start_date + timedelta(days=i))
+                day = start_date + timedelta(days=i)
                 dates.append(f"{day.year}-{day.month:02d}-{day.day:02d}")
-            
             dates_param = ",".join(dates)
             return f"https://api.fi.poweresta.com/publicmenu/dates/{site_path}/?menu=Ruokalista&dates={dates_param}"
         elif api_type == "compass":
-            # Compass Group API format
-            cost_center = config.get("cost_center", "1234")
+            cost_center = source.get("cost_center", "1234")
             use_date = target_date if target_date else datetime.now()
             date_str = f"{use_date.year}-{use_date.month:02d}-{use_date.day:02d}"
             return f"https://www.compass-group.fi/menuapi/week-menus?costCenter={cost_center}&date={date_str}&language={language}"
         else:
-            # Jamix API format
-            customer_id = config.get("customer_id", "12345")
-            kitchen_id = config.get("kitchen_id", "12")
+            customer_id = source.get("customer_id", "12345")
+            kitchen_id = source.get("kitchen_id", "12")
             return f"https://fi.jamix.cloud/apps/menuservice/rest/haku/menu/{customer_id}/{kitchen_id}?lang={language}"
+
+    def get_menu_url(self, guild_id: int, target_date: Optional[datetime] = None) -> str:
+        """Get the API URL for a server — uses the first configured source.
+
+        Args:
+            guild_id: The guild ID
+            target_date: Optional target date for the menu (defaults to today)
+        """
+        sources = self.get_menu_sources(guild_id)
+        primary = sources[0] if sources else {}
+        return self.get_menu_url_for_source(primary, target_date)
     
     def get_daily_channel(self, guild_id: int) -> Optional[int]:
         """Get daily posting channel for a server"""
