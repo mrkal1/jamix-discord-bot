@@ -1,6 +1,7 @@
 services:
   jamixdiscordbot:
     image: jamixdiscordbot
+    restart: unless-stopped
     build:
       context: .
       dockerfile: ./Dockerfile
