@@ -97,28 +97,40 @@ class MenuView(discord.ui.View):
     async def _select_source_callback(self, interaction: discord.Interaction):
         """Called when the user picks a different source from the dropdown."""
         source_idx = int(interaction.data["values"][0]) % max(len(self.sources), 1)
-        self.current_source = source_idx
-        src_name = self.sources[source_idx]
-        self.menu_data = self.all_menus_data[src_name]
-        self.days = list(self.menu_data.keys())
-        self.current_day = 0
-
-        # Update the Select to reflect the new default
-        for item in self.children:
-            if isinstance(item, discord.ui.Select) and item.custom_id == "menu:select_source":
-                for opt in item.options:
-                    opt.default = (opt.value == str(source_idx))
-                break
-
-        embed = self.create_menu_embed()
+        if not self.all_menus_data:
+            await interaction.response.send_message("❌ Multi-source menu data not available.", ephemeral=True)
+            return
         is_ephemeral = interaction.message and interaction.message.flags.ephemeral
 
         if is_ephemeral:
+            self.current_source = source_idx
+            src_name = self.sources[source_idx]
+            self.menu_data = self.all_menus_data[src_name]
+            self.days = list(self.menu_data.keys())
+            self.current_day = 0
+
+            # Update the Select to reflect the new default
+            for item in self.children:
+                if isinstance(item, discord.ui.Select) and item.custom_id == "menu:select_source":
+                    for opt in item.options:
+                        opt.default = (opt.value == str(source_idx))
+                    break
+
+            embed = self.create_menu_embed()
             if self.persistent and self.message_id and interaction.channel_id:
                 self._save_to_db(self.message_id, interaction.channel_id)
             await interaction.response.edit_message(embed=embed, view=self)
         else:
-            await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+            user_view = MenuView(
+                menu_data=None,
+                current_day=0,
+                guild_id=self.guild_id,
+                persistent=False,
+                all_menus_data=self.all_menus_data,
+                current_source=source_idx,
+            )
+            embed = user_view.create_menu_embed()
+            await interaction.response.send_message(embed=embed, view=user_view, ephemeral=True)
 
     # ------------------------------------------------------------------ #
     #  Buttons                                                             #
@@ -126,37 +138,57 @@ class MenuView(discord.ui.View):
 
     @discord.ui.button(label='◀️ Edellinen Päivä', style=discord.ButtonStyle.secondary, custom_id="menu:previous_day")
     async def previous_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.current_day = (self.current_day - 1) % len(self.days)
-        embed = self.create_menu_embed()
-        
-        # Update database if this is a persistent view
-        if self.persistent and self.message_id and interaction.guild and interaction.channel_id:
-            self._save_to_db(self.message_id, interaction.channel_id)
-        
         # Check if this is an ephemeral message by looking at message flags
         is_ephemeral = interaction.message and interaction.message.flags.ephemeral
-        
+
         if is_ephemeral:
+            self.current_day = (self.current_day - 1) % len(self.days)
+            embed = self.create_menu_embed()
+
+            # Update database if this is a persistent view
+            if self.persistent and self.message_id and interaction.guild and interaction.channel_id:
+                self._save_to_db(self.message_id, interaction.channel_id)
+
             await interaction.response.edit_message(embed=embed, view=self)
         else:
-            await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+            new_day = (self.current_day - 1) % len(self.days)
+            user_view = MenuView(
+                menu_data=None,
+                current_day=new_day,
+                guild_id=self.guild_id,
+                persistent=False,
+                all_menus_data=self.all_menus_data,
+                current_source=self.current_source,
+            )
+            embed = user_view.create_menu_embed()
+            await interaction.response.send_message(embed=embed, view=user_view, ephemeral=True)
     
     @discord.ui.button(label='▶️ Seuraava Päivä', style=discord.ButtonStyle.secondary, custom_id="menu:next_day")
     async def next_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.current_day = (self.current_day + 1) % len(self.days)
-        embed = self.create_menu_embed()
-        
-        # Update database if this is a persistent view
-        if self.persistent and self.message_id and interaction.guild and interaction.channel_id:
-            self._save_to_db(self.message_id, interaction.channel_id)
-        
         # Check if this is an ephemeral message by looking at message flags
         is_ephemeral = interaction.message and interaction.message.flags.ephemeral
-        
+
         if is_ephemeral:
+            self.current_day = (self.current_day + 1) % len(self.days)
+            embed = self.create_menu_embed()
+
+            # Update database if this is a persistent view
+            if self.persistent and self.message_id and interaction.guild and interaction.channel_id:
+                self._save_to_db(self.message_id, interaction.channel_id)
+
             await interaction.response.edit_message(embed=embed, view=self)
         else:
-            await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+            new_day = (self.current_day + 1) % len(self.days)
+            user_view = MenuView(
+                menu_data=None,
+                current_day=new_day,
+                guild_id=self.guild_id,
+                persistent=False,
+                all_menus_data=self.all_menus_data,
+                current_source=self.current_source,
+            )
+            embed = user_view.create_menu_embed()
+            await interaction.response.send_message(embed=embed, view=user_view, ephemeral=True)
 
     @discord.ui.button(label='🔄 Päivitä', style=discord.ButtonStyle.primary, custom_id="menu:refresh_menu")
     async def refresh_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
